@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control de relé ESP32</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--panel:#dfe5e8;--card:#f3f6f7;--ink:#1b2b34;--mute:#5b6b73;--on:#f2a900;--off:#8a979d;--err:#b3261e;--line:#b9c4c9}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:1rem;background:var(--panel);color:var(--ink);font-family:"Barlow Semi Condensed",system-ui,sans-serif;font-size:1.1rem}
+main{width:min(26rem,100%);background:var(--card);border:2px solid var(--line);border-radius:14px;padding:1.75rem}
+h1{font-size:1.6rem;margin:0 0 .25rem}
+p{margin:0 0 1.25rem;color:var(--mute)}
+label{display:block;font-weight:500;margin-bottom:.9rem}
+input{display:block;width:100%;margin-top:.3rem;padding:.65rem .75rem;font:inherit;border:2px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+button{font:inherit;font-weight:700;cursor:pointer}
+.btn{width:100%;padding:.75rem;border:0;border-radius:8px;background:var(--ink);color:#fff}
+:focus-visible{outline:3px solid var(--on);outline-offset:2px}
+.error{color:var(--err);min-height:1.4em;margin:.75rem 0 0}
+.estado{display:flex;align-items:center;gap:.75rem;margin:1.5rem 0}
+.lampara{width:1.4rem;height:1.4rem;border-radius:50%;background:var(--off);border:2px solid var(--ink);flex:none}
+.lampara.on{background:var(--on);box-shadow:0 0 12px var(--on)}
+#estadoTxt{font-weight:700;font-size:1.25rem}
+.switch{position:relative;width:100%;height:5.5rem;border:2px solid var(--ink);border-radius:14px;background:var(--off);transition:background .2s}
+.switch[aria-checked="true"]{background:var(--on)}
+.switch::after{content:"";position:absolute;top:.5rem;left:.5rem;width:calc(50% - .5rem);height:calc(100% - 1rem);border-radius:8px;background:var(--card);border:2px solid var(--ink);transition:transform .2s}
+.switch[aria-checked="true"]::after{transform:translateX(calc(100% + 0rem))}
+.switch span{position:absolute;top:50%;transform:translateY(-50%);font-weight:700}
+.switch .a{left:20%}.switch .b{right:18%}
+.salir{margin-top:1.5rem;background:none;border:0;color:var(--mute);text-decoration:underline;padding:0}
+@media (prefers-reduced-motion:reduce){.switch,.switch::after{transition:none}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Control de relé</h1>
+
+  <section id="login" hidden>
+    <p>Inicia sesión para controlar la ESP32.</p>
+    <label>Correo<input id="email" type="email" autocomplete="username"></label>
+    <label>Contraseña<input id="clave" type="password" autocomplete="current-password"></label>
+    <button class="btn" id="entrar">Iniciar sesión</button>
+    <p class="error" id="error" role="alert"></p>
+  </section>
+
+  <section id="panel" hidden>
+    <p>Pulsa el interruptor para accionar el relé.</p>
+    <button class="switch" id="interruptor" role="switch" aria-checked="false" aria-label="Relé">
+      <span class="a">Apagar</span><span class="b">Encender</span>
+    </button>
+    <div class="estado"><div class="lampara" id="lampara"></div><div id="estadoTxt">Conectando…</div></div>
+    <button class="salir" id="salir">Cerrar sesión</button>
+  </section>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+// ---- Pega aquí la configuración de tu app web de Firebase ----
+const firebaseConfig = {
+  apiKey: "AIzaSyCzjsorqAYAuamCYOlIRctwZIxgOcVAngU",
+  authDomain: "TU_PROYECTO.firebaseapp.com",
+  databaseURL: "https://rele-esp-default-rtdb.firebaseio.com",
+  projectId: "TU_PROYECTO",
+  appId: "TU_APP_ID"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+const $ = id => document.getElementById(id);
+
+let pedido = false, confirmado = false, escuchando = false;
+
+function pintar() {
+  $("interruptor").setAttribute("aria-checked", pedido);
+  $("lampara").classList.toggle("on", confirmado);
+  $("estadoTxt").textContent = pedido === confirmado
+    ? (confirmado ? "Relé encendido" : "Relé apagado")
+    : "Esperando a la ESP32…";
+}
+
+onAuthStateChanged(auth, user => {
+  $("login").hidden = !!user;
+  $("panel").hidden = !user;
+  if (user && !escuchando) {
+    escuchando = true;
+    onValue(ref(db, "rele"), snap => {
+      const v = snap.val() || {};
+      pedido = !!v.estado;
+      confirmado = !!v.confirmado;
+      pintar();
+    }, () => { $("estadoTxt").textContent = "Sin permiso para leer la base de datos"; });
+  }
+});
+
+$("entrar").onclick = async () => {
+  $("error").textContent = "";
+  try {
+    await signInWithEmailAndPassword(auth, $("email").value.trim(), $("clave").value);
+  } catch (e) {
+    $("error").textContent = "Correo o contraseña incorrectos.";
+  }
+};
+
+$("interruptor").onclick = () => set(ref(db, "rele/estado"), !pedido);
+$("salir").onclick = () => signOut(auth);
+</script>
+</body>
+</html>
